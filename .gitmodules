@@ -1,7 +1,7 @@
 [submodule "koreader-base"]
 	path = base
-	url = https://github.com/plateaukao/koreader-base.git
-	branch = sony-stylus
+	url = https://github.com/m-tky/koreader-base.git
+	branch = master
 [submodule "platform/android/luajit-launcher"]
 	path = platform/android/luajit-launcher
 	url = https://github.com/plateaukao/android-luajit-launcher.git

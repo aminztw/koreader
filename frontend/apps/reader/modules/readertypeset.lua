@@ -20,6 +20,17 @@ local ReaderTypeset = WidgetContainer:extend{
     unscaled_margins = nil,
 }
 
+-- This is deliberately an appended stylesheet rather than a screen rotation:
+-- the tategumi CRengine fork sees it during layout and can use vertical font
+-- metrics, OpenType vert/vrt2 substitutions, ruby positioning and vertical
+-- page flow.
+local VERTICAL_READING_CSS = [[
+html, body {
+    writing-mode: vertical-rl !important;
+    text-orientation: mixed !important;
+}
+]]
+
 function ReaderTypeset:init()
     self.ui.menu:registerToMainMenu(self)
 end
@@ -36,7 +47,8 @@ function ReaderTypeset:onReadSettings(config)
     if not self.css then
         self.css = self.ui.document.default_css
     end
-    local tweaks_css = self.ui.styletweak:getCssText()
+    self.vertical_reading = config:isTrue("vertical_reading")
+    local tweaks_css = self:getAppendedStyleSheet()
     self.ui.document:setStyleSheet(self.css, tweaks_css)
 
     -- default to enable embedded fonts
@@ -110,6 +122,26 @@ end
 
 function ReaderTypeset:onSaveSettings()
     self.ui.doc_settings:saveSetting("css", self.css)
+end
+
+function ReaderTypeset:getAppendedStyleSheet()
+    local tweaks_css = self.ui.styletweak:getCssText() or ""
+    if self.vertical_reading then
+        return tweaks_css .. "\n" .. VERTICAL_READING_CSS
+    end
+    return tweaks_css
+end
+
+function ReaderTypeset:onToggleVerticalReading(toggle)
+    if toggle == nil then
+        toggle = not self.vertical_reading
+    end
+    self.vertical_reading = toggle
+    self.ui.doc_settings:saveSetting("vertical_reading", toggle or nil)
+    -- A reload restores the current position after the vertical layout has
+    -- recalculated its page map, as with the former user patch.
+    self.ui:reloadDocument()
+    return true
 end
 
 function ReaderTypeset:onToggleEmbeddedStyleSheet(toggle)
@@ -350,7 +382,7 @@ This stylesheet is to be used only with FB2 and FB3 documents, which are not cla
 end
 
 function ReaderTypeset:onApplyStyleSheet()
-    local tweaks_css = self.ui.styletweak:getCssText()
+    local tweaks_css = self:getAppendedStyleSheet()
     self.ui.document:setStyleSheet(self.css, tweaks_css)
     self.ui:handleEvent(Event:new("UpdatePos"))
     return true
@@ -359,7 +391,7 @@ end
 function ReaderTypeset:setStyleSheet(new_css)
     if new_css ~= self.css then
         self.css = new_css
-        local tweaks_css = self.ui.styletweak:getCssText()
+        local tweaks_css = self:getAppendedStyleSheet()
         self.ui.document:setStyleSheet(new_css, tweaks_css)
         self.ui:handleEvent(Event:new("UpdatePos"))
     end
@@ -452,6 +484,15 @@ function ReaderTypeset:addToMainMenu(menu_items)
     menu_items.set_render_style = {
         text = self.css_menu_title,
         sub_item_table = self:genStyleSheetMenu(),
+    }
+    menu_items.toggle_vertical_reading = {
+        sorting_hint = "typeset",
+        text = _("Vertical reading"),
+        checked_func = function() return self.vertical_reading end,
+        callback = function()
+            self:onToggleVerticalReading()
+        end,
+        help_text = _("Lay out this book vertically from right to left. Requires the native vertical-text renderer."),
     }
 end
 

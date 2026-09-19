@@ -34,7 +34,7 @@ local ReaderView = OverlapGroup:extend{
     -- single page state
     state = nil, -- table
     outer_page_color = Blitbuffer.gray(G_defaults:readSetting("DOUTER_PAGE_COLOR") * (1/15)),
-    -- highlight with "lighten" or "underscore" or "strikeout" or "invert"
+    -- highlight with "lighten", "underscore", "strikeout", "squiggly" or "invert"
     highlight = nil, -- table
     highlight_visible = true,
     note_mark_line_w = 3, -- side line thickness
@@ -241,7 +241,10 @@ function ReaderView:paintTo(bb, x, y)
     end
     -- draw temporary highlight
     if self.highlight.temp and next(self.highlight.temp) then
-        self:drawTempHighlight(bb, x, y)
+        local temp_colorful = self:drawTempHighlight(bb, x, y)
+        if temp_colorful then
+            colorful = true
+        end
     end
     -- paint dogear
     if self.dogear_visible then
@@ -256,6 +259,12 @@ function ReaderView:paintTo(bb, x, y)
     -- paint view modules
     for _, m in pairs(self.view_modules) do
         m:paintTo(bb, x, y)
+    end
+    -- crengine draws in-progress selections into its page buffer by default.
+    -- Paint the tracked range last so it follows the selected style.
+    local selection_colorful = self:drawSelectionHighlight(bb, x, y)
+    if selection_colorful then
+        colorful = true
     end
     -- stop activity indicator
     self.ui:handleEvent(Event:new("StopActivityIndicator"))
@@ -503,17 +512,81 @@ function ReaderView:drawScrollView(bb, x, y)
 end
 
 function ReaderView:drawTempHighlight(bb, x, y)
-    local color = self.highlight.saved_drawer ~= "invert"
-        and G_reader_settings:isTrue("highlight_selection_use_highlight_color")
-        and Blitbuffer.colorFromName(self.highlight.saved_color) or nil
+    -- crengine's selection is tracked and painted below for rolling documents.
+    -- Avoid drawing the old native selection boxes a second time.
+    if self.ui and self.ui.rolling and self.document and self.document._selection_range then
+        return
+    end
+
+    local drawer = self.highlight.saved_drawer or self.highlight.temp_drawer or "lighten"
+    local color
+    if drawer ~= "invert" and self.highlight.saved_color and Blitbuffer.colorFromName then
+        color = Blitbuffer.colorFromName(self.highlight.saved_color)
+    end
+    local colorful = color and not Blitbuffer.isColor8(color) or false
     for page, boxes in pairs(self.highlight.temp) do
         for i = 1, #boxes do
             local rect = self:pageToScreenTransform(page, boxes[i])
             if rect then
-                self:drawHighlightRect(bb, x, y, rect, self.highlight.temp_drawer, color)
+                self:drawSelectionHighlightRect(bb, x, y, rect, drawer, color)
             end
         end
     end
+    return colorful
+end
+
+-- Paint a selection box with the regular highlight opacity. Temporary
+-- selection boxes use a separate opacity setting for lighten highlights; the
+-- selection-style behavior makes them look exactly like a saved highlight,
+-- so temporarily hide that state while drawing.
+function ReaderView:drawSelectionHighlightRect(bb, _x, _y, rect, drawer, color)
+    local temp = self.highlight.temp
+    self.highlight.temp = {}
+    self:drawHighlightRect(bb, _x, _y, rect, drawer, color)
+    self.highlight.temp = temp
+end
+
+local function selectionRangeOnScreen(view, range)
+    local doc = view.document
+    if not (doc.getPosFromXPointer and doc.getCurrentPos) then return true end
+    local ok, top = pcall(doc.getCurrentPos, doc)
+    if not ok or type(top) ~= "number" then return true end
+
+    local height = view.ui and view.ui.dimen and view.ui.dimen.h or 0
+    if view.view_mode == "page" and doc.getVisiblePageCount and doc:getVisiblePageCount() > 1 then
+        height = height * 2
+    end
+    local ok0, start_pos = pcall(doc.getPosFromXPointer, doc, range[1])
+    local ok1, end_pos = pcall(doc.getPosFromXPointer, doc, range[2])
+    if not (ok0 and ok1 and type(start_pos) == "number" and type(end_pos) == "number") then
+        return true
+    end
+    return start_pos <= top + height and end_pos >= top
+end
+
+function ReaderView:drawSelectionHighlight(bb, x, y)
+    if not (self.ui and self.ui.rolling and self.document and self.document._selection_range) then
+        return false
+    end
+
+    local range = self.document._selection_range
+    if not selectionRangeOnScreen(self, range) then return false end
+    local ok, boxes = pcall(self.document.getScreenBoxesFromPositions,
+        self.document, range[1], range[2], true)
+    if not ok or not boxes then return false end
+
+    local drawer = self.highlight.saved_drawer or self.highlight.temp_drawer or "lighten"
+    local color
+    if drawer ~= "invert" and self.highlight.saved_color and Blitbuffer.colorFromName then
+        color = Blitbuffer.colorFromName(self.highlight.saved_color)
+    end
+    local colorful = color and not Blitbuffer.isColor8(color) or false
+    for _, box in ipairs(boxes) do
+        if box.h ~= 0 then
+            self:drawSelectionHighlightRect(bb, x, y, box, drawer, color)
+        end
+    end
+    return colorful
 end
 
 function ReaderView:drawSavedHighlight(bb, x, y)
@@ -658,11 +731,19 @@ end
 
 function ReaderView:drawHighlightRect(bb, _x, _y, rect, drawer, color, draw_note_mark)
     local x, y, w, h = rect.x, rect.y, rect.w, rect.h
+    -- This is CRengine's writing mode, not a screen rotation or userpatch
+    -- setting. Vertical text needs line-style highlights to follow columns.
+    local vertical = self.document.isVerticalText and self.document:isVerticalText()
     if drawer == "lighten" or drawer == "invert" then
         local pct = G_reader_settings:readSetting("highlight_height_pct")
         if pct ~= nil then
-            h = math.floor(h * pct / 100)
-            y = y + math.ceil((rect.h - h) / 2)
+            if vertical then
+                w = math.floor(w * pct / 100)
+                x = x + math.ceil((rect.w - w) / 2)
+            else
+                h = math.floor(h * pct / 100)
+                y = y + math.ceil((rect.h - h) / 2)
+            end
         end
     end
     if drawer == "lighten" then
@@ -686,23 +767,69 @@ function ReaderView:drawHighlightRect(bb, _x, _y, rect, drawer, color, draw_note
         if not color then
             color = Blitbuffer.COLOR_GRAY_4
         end
-        if Blitbuffer.isColor8(color) then
+        if vertical then
+            local line_x = x + w - Size.line.thick
+            if Blitbuffer.isColor8(color) then
+                bb:paintRect(line_x, y, Size.line.thick, h, color)
+            else
+                bb:paintRectRGB32(line_x, y, Size.line.thick, h, Screen.night_mode and color:invert() or color)
+            end
+        elseif Blitbuffer.isColor8(color) then
             bb:paintRect(x, y + h - 1, w, Size.line.thick, color)
         else
             bb:paintRectRGB32(x, y + h - 1, w, Size.line.thick, Screen.night_mode and color:invert() or color)
+        end
+    elseif drawer == "squiggly" then
+        if not color then
+            color = Blitbuffer.COLOR_GRAY_4
+        end
+        local thick = Size.line.thick
+        local amp = math.max(2, math.floor(thick + 0.5))
+        local wavelength = amp * 6
+        local tau = 2 * math.pi
+        local is8 = Blitbuffer.isColor8(color)
+        if vertical then
+            local base_x = x + w - thick
+            for j = 0, h - 1 do
+                local px = base_x + math.floor(amp * math.sin(tau * j / wavelength) + 0.5)
+                if is8 then
+                    bb:paintRect(px, y + j, thick, 1, color)
+                else
+                    bb:paintRectRGB32(px, y + j, thick, 1, Screen.night_mode and color:invert() or color)
+                end
+            end
+        else
+            local mid = y + h - 1 - amp
+            for i = 0, w - 1 do
+                local py = mid + math.floor(amp * math.sin(tau * i / wavelength) + 0.5)
+                if is8 then
+                    bb:paintRect(x + i, py, 1, thick, color)
+                else
+                    bb:paintRectRGB32(x + i, py, 1, thick, Screen.night_mode and color:invert() or color)
+                end
+            end
         end
     elseif drawer == "strikeout" then
         if not color then
             color = Blitbuffer.COLOR_BLACK
         end
-        local line_y = y + math.floor(h / 2) + 1
-        if self.ui.paging then
-            line_y = line_y + 2
-        end
-        if Blitbuffer.isColor8(color) then
-            bb:paintRect(x, line_y, w, Size.line.medium, color)
+        if vertical then
+            local line_x = x + math.floor((w - Size.line.medium) / 2)
+            if Blitbuffer.isColor8(color) then
+                bb:paintRect(line_x, y, Size.line.medium, h, color)
+            else
+                bb:paintRectRGB32(line_x, y, Size.line.medium, h, Screen.night_mode and color:invert() or color)
+            end
         else
-            bb:paintRectRGB32(x, line_y, w, Size.line.medium, Screen.night_mode and color:invert() or color)
+            local line_y = y + math.floor(h / 2) + 1
+            if self.ui.paging then
+                line_y = line_y + 2
+            end
+            if Blitbuffer.isColor8(color) then
+                bb:paintRect(x, line_y, w, Size.line.medium, color)
+            else
+                bb:paintRectRGB32(x, line_y, w, Size.line.medium, Screen.night_mode and color:invert() or color)
+            end
         end
     elseif drawer == "invert" then
         bb:invertRect(x, y, w, h)

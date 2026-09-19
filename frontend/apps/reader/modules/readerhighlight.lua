@@ -351,6 +351,7 @@ local highlight_style = {
     {_("Lighten"), "lighten"},
     {_("Underline"), "underscore"},
     {_("Strikethrough"), "strikeout"},
+    {_("Squiggly"), "squiggly"},
     {_("Invert"), "invert"},
 }
 
@@ -2519,6 +2520,12 @@ function ReaderHighlight:extendSelection()
         new_pboxes = self.document:getScreenBoxesFromPositions(new_pos0, new_pos1, true)
         -- true to draw
         new_text = self.ui.document:getTextFromXPointers(new_pos0, new_pos1, true)
+        -- Do not leave crengine's native selection visible. ReaderView paints
+        -- this range with the selected highlight's style instead.
+        self.ui.document:clearSelection()
+        if self.ui.document.setSelectionRange then
+            self.ui.document:setSelectionRange(new_pos0, new_pos1)
+        end
     end
     self:deleteHighlight(self.highlight_idx) -- starting fragment
     self.selected_text = {

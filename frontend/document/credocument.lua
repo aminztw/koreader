@@ -615,12 +615,14 @@ function CreDocument:getWordFromPosition(pos, do_not_draw_selection)
     local word_found = false
     local box_found = false
 
-    local drawSelection, drawSegmentedSelection
-    if do_not_draw_selection then
-        drawSelection, drawSegmentedSelection = false, false
-    end
-    local text_range = self._document:getTextFromPositions(pos.x, pos.y, pos.x, pos.y, drawSelection, drawSegmentedSelection)
+    -- Selection is painted by ReaderView so it can use the current highlight
+    -- style and color. Native selection drawing is suppressed for both the
+    -- normal and explicit no-draw paths; only the normal path is tracked.
+    local text_range = self._document:getTextFromPositions(pos.x, pos.y, pos.x, pos.y, false, false)
     logger.dbg("CreDocument: get text range", text_range)
+    if not do_not_draw_selection and text_range and text_range.pos0 and text_range.pos1 then
+        self._selection_range = { text_range.pos0, text_range.pos1 }
+    end
     if text_range then
         if text_range.text and text_range.text ~= "" then
             wordbox.word = text_range.text
@@ -680,13 +682,12 @@ function CreDocument:getWordFromPosition(pos, do_not_draw_selection)
 end
 
 function CreDocument:getTextFromPositions(pos0, pos1, do_not_draw_selection)
-    local drawSelection, drawSegmentedSelection
-    if do_not_draw_selection then
-        drawSelection, drawSegmentedSelection = false, false
-    end
     local text_range = self._document:getTextFromPositions(pos0.x, pos0.y, pos1.x, pos1.y,
-        drawSelection, drawSegmentedSelection)
+        false, false)
     logger.dbg("CreDocument: get text range", text_range)
+    if not do_not_draw_selection and text_range and text_range.pos0 and text_range.pos1 then
+        self._selection_range = { text_range.pos0, text_range.pos1 }
+    end
     if text_range then
         local line_boxes = self:getScreenBoxesFromPositions(text_range.pos0, text_range.pos1, true)
         return {
@@ -979,6 +980,12 @@ function CreDocument:getTextFromXPointers(pos0, pos1, draw_selection)
     return self._document:getTextFromXPointers(pos0, pos1, draw_selection, draw_segmented_selection)
 end
 
+-- CRengine owns vertical layout. ReaderView uses this to orient line-style
+-- highlights to the document's actual writing mode.
+function CreDocument:isVerticalText()
+    return self._document:isVerticalText()
+end
+
 function CreDocument:extendXPointersToSentenceSegment(pos0, pos1)
     return self._document:extendXPointersToSentenceSegment(pos0, pos1)
 end
@@ -1221,7 +1228,17 @@ end
 
 function CreDocument:clearSelection()
     logger.dbg("clear selection")
+    self._selection_range = nil
     self._document:clearSelection()
+end
+
+-- Keep a selection obtained through XPointers in the same path as a selection
+-- obtained from screen positions. This is used when extending a saved
+-- highlight, where the text itself is retrieved directly from crengine.
+function CreDocument:setSelectionRange(pos0, pos1)
+    if pos0 and pos1 then
+        self._selection_range = { pos0, pos1 }
+    end
 end
 
 function CreDocument:getFontSize()

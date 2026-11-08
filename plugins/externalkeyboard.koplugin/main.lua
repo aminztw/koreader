@@ -6,6 +6,7 @@ local lfs = require("libs/libkoreader-lfs")
 local logger = require("logger")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
+local ffiUtil = require("ffi/util")
 local util = require("util")
 local _ = require("gettext")
 
@@ -310,6 +311,29 @@ ExternalKeyboard._broadcastDisconnected = UIManager:debounce(0.5, false, functio
     UIManager:broadcastEvent(Event:new("PhysicalKeyboardDisconnected"))
 end)
 
+-- Filter out built-in SoC keypad/button controllers (such as MediaTek's mtk-kpd
+-- on MTK Kindles) that declare full keyboard keybits (bits 1..31) in evdev and
+-- would otherwise be falsely detected by fbink_input_scan(INPUT_KEYBOARD) as an
+-- external physical keyboard, suppressing the on-screen VirtualKeyboard.
+local function isBuiltInKeyboard(event_path, name)
+    if name == "mtk-kpd" or name:find("^mtk%-") or name == "gpio-keys"
+            or name == "whitney-button" or name == "sunxi-keyboard" then
+        return true
+    end
+    if Device:isKindle() and type(event_path) == "string" then
+        local event_name = event_path:match("event%d+$")
+        if event_name then
+            local sysfs_path = ffiUtil.realpath("/sys/class/input/" .. event_name)
+            -- On Kindle, external keyboards come from UHID (/sys/devices/virtual/)
+            -- or USB host (/usb); non-USB /sys/devices/platform/ nodes are built-in SoC devices.
+            if sysfs_path and sysfs_path:find("^/sys/devices/platform/") and not sysfs_path:find("/usb") then
+                return true
+            end
+        end
+    end
+    return false
+end
+
 -- Implement FindKeyboard:find & check via FBInkInput
 local function findKeyboards()
     local keyboards = {}
@@ -321,9 +345,18 @@ local function findKeyboards()
         for i = 0, tonumber(dev_count[0]) - 1 do
             local dev = devices[i]
             if dev.matched then
-                -- Check if it provides a DPad, too.
-                local has_dpad = bit.band(dev.type, C.INPUT_DPAD) ~= 0
-                table.insert(keyboards, { event_fd = tonumber(dev.fd), event_path = ffi.string(dev.path), name = ffi.string(dev.name), has_dpad = has_dpad })
+                local event_path = ffi.string(dev.path)
+                local name = ffi.string(dev.name)
+                if isBuiltInKeyboard(event_path, name) then
+                    logger.dbg("ExternalKeyboard: ignoring built-in input device", name, "@", event_path)
+                    if dev.fd >= 0 then
+                        C.close(dev.fd)
+                    end
+                else
+                    -- Check if it provides a DPad, too.
+                    local has_dpad = bit.band(dev.type, C.INPUT_DPAD) ~= 0
+                    table.insert(keyboards, { event_fd = tonumber(dev.fd), event_path = event_path, name = name, has_dpad = has_dpad })
+                end
             end
         end
         C.free(devices)
@@ -339,12 +372,21 @@ local function checkKeyboard(path)
     local dev = FBInkInput.fbink_input_check(path, C.INPUT_KEYBOARD, 0, 0)
     if dev ~= nil then
         if dev.matched then
-            keyboard = {
-                event_fd = tonumber(dev.fd),
-                event_path = ffi.string(dev.path),
-                name = ffi.string(dev.name),
-                has_dpad = bit.band(dev.type, C.INPUT_DPAD) ~= 0
-            }
+            local event_path = ffi.string(dev.path)
+            local name = ffi.string(dev.name)
+            if isBuiltInKeyboard(event_path, name) then
+                logger.dbg("ExternalKeyboard: ignoring built-in input device", name, "@", event_path)
+                if dev.fd >= 0 then
+                    C.close(dev.fd)
+                end
+            else
+                keyboard = {
+                    event_fd = tonumber(dev.fd),
+                    event_path = event_path,
+                    name = name,
+                    has_dpad = bit.band(dev.type, C.INPUT_DPAD) ~= 0
+                }
+            end
         end
         C.free(dev)
     end

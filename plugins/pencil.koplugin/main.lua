@@ -9,6 +9,9 @@ local Blitbuffer = require("ffi/blitbuffer")
 local CenterContainer = require("ui/widget/container/centercontainer")
 local DataStorage = require("datastorage")
 local Device = require("device")
+if not Device:isTouchDevice() or (Device:isKindle() and Device.model ~= "KindleScribe" and not os.getenv("KO_ENABLE_PENCIL")) then
+    return { disabled = true }
+end
 local Dispatcher = require("dispatcher")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")
@@ -1294,12 +1297,13 @@ function Pencil:setTool(tool, silent)
 end
 
 function Pencil:isEnabled()
-    -- Default ON: when the setting has never been written (fresh install),
-    -- treat the plugin as enabled so the supernote_ink build lights up
-    -- pencil out of the box.
     local v = G_reader_settings:readSetting("pencil_annotation_enabled")
-    if v == nil then return true end
-    return v == true
+    if v ~= nil then return v == true end
+    -- Default to false on non-stylus Kindles (e.g. Kindle Basic, Paperwhite, Oasis)
+    if Device:isKindle() and not (Device.model and Device.model:find("Scribe")) then
+        return false
+    end
+    return true
 end
 
 -- Check if a menu or overlay is shown on top of the reader view.

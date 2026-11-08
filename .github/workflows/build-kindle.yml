@@ -49,6 +49,13 @@ jobs:
             echo "Successfully applied custom zh_TW translations"
           fi
 
+      - name: Apply crengine performance patch
+        run: |
+          if [ -f "tools/crengine-perf.patch" ]; then
+            git -C base/thirdparty/kpvcrlib/crengine apply "$PWD/tools/crengine-perf.patch"
+            echo "Successfully applied crengine-perf.patch"
+          fi
+
       - name: Optimize Network and Force IPv4
         run: |
           sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1 || true

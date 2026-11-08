@@ -320,6 +320,12 @@ local function isBuiltInKeyboard(event_path, name)
             or name == "whitney-button" or name == "sunxi-keyboard" then
         return true
     end
+    -- Amazon's input_manager (firmware 5.20+) creates `kindle-input-pt`, a virtual pass-through node
+    -- that advertises every capability (KEYBOARD and DPAD included) to relay page-turner remotes.
+    -- It lives under /sys/devices/virtual/ just like a UHID keyboard, so only its name gives it away.
+    if Device:isKindle() and name == "kindle-input-pt" then
+        return true
+    end
     if Device:isKindle() and type(event_path) == "string" then
         local event_name = event_path:match("event%d+$")
         if event_name then

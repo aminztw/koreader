@@ -36,7 +36,7 @@ jobs:
 
     steps:
       - name: Checkout repository (with submodules)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: recursive
           fetch-depth: 0
@@ -65,7 +65,7 @@ jobs:
           echo "precedence ::ffff:0:0/96 100" | sudo tee -a /etc/gai.conf
 
       - name: Cache third-party source downloads
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: base/thirdparty/*/build/downloads
           key: thirdparty-src-${{ hashFiles('base/thirdparty/*/CMakeLists.txt') }}
@@ -112,7 +112,7 @@ jobs:
           ls -lh "$pkg"
 
       - name: Upload ${{ matrix.target }} Release Zip
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: koreader-${{ matrix.target }}
           path: ${{ steps.pkg.outputs.path }}
@@ -126,12 +126,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Download all built packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: release-assets
           merge-multiple: true
